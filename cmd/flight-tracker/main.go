@@ -3,22 +3,36 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/bradfitz/slice"
 	"github.com/concourse/fly/rc"
 	"github.com/donaldguy/flightplan"
-	"github.com/fatih/color"
 	flags "github.com/jessevdk/go-flags"
 	git "gopkg.in/libgit2/git2go.v24"
 )
+
+type duration time.Duration
+
+func (freq *duration) UnmarshalFlag(value string) (err error) {
+	f, err := time.ParseDuration(value)
+	*freq = duration(f)
+	return
+}
 
 type options struct {
 	Version func() `short:"v" long:"version" description:"Print the version and exit"`
 
 	Target   rc.TargetName `short:"t" long:"target" description:"Fly target to monitor" env:"FLIGHT_TRACKER_SERVER" required:"true"`
-	RepoPath string        `short:"r" long:"git-repo-path" description:"Path to a local checkout of the git repo you are tracking" required:"true"`
-	Branch   string        `short:"b" long:"branch" description:"The name of the branch you are tracking" default:"master"`
 	Pipeline string        `short:"p" long:"pipeline" description:"Name of pipeline you are tracking. Defaults to name of branch"`
+
+	RepoPath string `short:"r" long:"git-repo-path" description:"Path to a local checkout of the git repo you are tracking" required:"true"`
+	Branch   string `short:"b" long:"branch" description:"The name of the branch you are tracking" default:"master"`
+
+	SlackToken   string `long:"slack-token" env:"FLIGHT_TRACKER_SLACK_TOKEN" required:"true" description:"Slack token"`
+	SlackChannel string `short:"c" long:"slack-channel" required:"true" description:"Slack channel or username to send to"`
+
+	PollFreq duration `short:"f" long:"polling-frequency" default:"5s"`
 }
 
 func dieIf(err error) {
@@ -67,27 +81,28 @@ func main() {
 
 	commit := flightplan.GitCommit{Repo: repo, Commit: gCommit}
 
-	bold := color.New(color.Bold).PrintfFunc()
-	bold("The story of %s:\n\n", commit.Id())
-	shaShort := commit.Id().String()[0:7]
-
-	fmt.Printf("%s was written   on %s by %s\n", shaShort, fmtTime(commit.Author().When), commit.Author().Name)
-	fmt.Printf("        and committed on %s by %s\n\n", fmtTime(commit.Committer().When), commit.Committer().Name)
-
 	pipeline, err := flightplan.NewPipeline(teamClient, opts.Pipeline)
 	dieIf(err)
 	resources, err := commit.ResourcesTriggeredIn(pipeline)
 	dieIf(err)
-	fmt.Printf("Thus it would come to trigger the following resources: %v\n", color.CyanString("%v", resources))
 
 	slice.Sort(resources, func(i, j int) bool {
 		return resources[i] < resources[j]
 	})
-	for _, resourceName := range resources {
-		fmt.Printf("\nOf %s:\n", fmtResourceName(resourceName))
+
+	journeys := make([]*ResourceSection, len(resources))
+
+	for i, resourceName := range resources {
 		rv, err := pipelineClient.gitSha2ResourceVersion(resourceName, commit.Id().String())
 		dieIf(err)
 
-		fmt.Printf("%s", pipelineClient.DescribeResourceJourney(rv))
+		journeys[i] = NewResourceJourney(&pipelineClient, rv)
 	}
+
+	s := slackInit(opts.SlackToken)
+	if opts.SlackChannel[0] == '#' {
+		opts.SlackChannel = opts.SlackChannel[1:]
+	}
+	err = s.WriteBuildToChannel(commit, journeys, opts.SlackChannel)
+	dieIf(err)
 }
