@@ -45,12 +45,19 @@ func (pc *PipelineClient) describeResourceJourney(rv *atc.VersionedResource) []b
 	builds, _, err := pc.Team.BuildsWithVersionAsInput(pc.PipelineName, rv.Resource, rv.ID)
 	dieIf(err)
 	for _, build := range builds {
-		fmt.Fprintf(&b, "it triggered %s #%s, which %s after %s",
-			color.YellowString("%s", build.JobName),
-			build.Name,
-			build.Status,
-			(time.Duration(build.EndTime-build.StartTime) * time.Second).String(),
-		)
+		if build.IsRunning() {
+			fmt.Fprintf(&b, "it triggered %s #%s, which is still running...",
+				color.YellowString("%s", build.JobName),
+				build.Name,
+			)
+		} else {
+			fmt.Fprintf(&b, "it triggered %s #%s, which %s after %s",
+				color.YellowString("%s", build.JobName),
+				build.Name,
+				build.Status,
+				(time.Duration(build.EndTime-build.StartTime) * time.Second).String(),
+			)
+		}
 
 		rio, _, err := pc.Client.BuildResources(build.ID)
 		dieIf(err)
