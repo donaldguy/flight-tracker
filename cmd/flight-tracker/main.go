@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bradfitz/slice"
 	"github.com/concourse/fly/rc"
 	"github.com/donaldguy/flightplan"
 	"github.com/fatih/color"
@@ -11,7 +12,7 @@ import (
 	git "gopkg.in/libgit2/git2go.v24"
 )
 
-type Options struct {
+type options struct {
 	Version func() `short:"v" long:"version" description:"Print the version and exit"`
 
 	Target   rc.TargetName `short:"t" long:"target" description:"Fly target to monitor" env:"FLIGHT_TRACKER_SERVER" required:"true"`
@@ -28,7 +29,7 @@ func dieIf(err error) {
 }
 
 func main() {
-	var opts Options
+	var opts options
 	opts.Version = func() {
 		fmt.Println("0.0.1")
 		os.Exit(0)
@@ -69,20 +70,24 @@ func main() {
 	bold := color.New(color.Bold).PrintfFunc()
 	bold("The story of %s:\n\n", commit.Id())
 	shaShort := commit.Id().String()[0:7]
-	fmt.Printf("%s was written   on %s by %s\n", shaShort, commit.Author().When, commit.Author().Name)
-	fmt.Printf("        and committed on %s by %s\n\n", commit.Committer().When, commit.Committer().Name)
+
+	fmt.Printf("%s was written   on %s by %s\n", shaShort, fmtTime(commit.Author().When), commit.Author().Name)
+	fmt.Printf("        and committed on %s by %s\n\n", fmtTime(commit.Committer().When), commit.Committer().Name)
 
 	pipeline, err := flightplan.NewPipeline(teamClient, opts.Pipeline)
 	dieIf(err)
 	resources, err := commit.ResourcesTriggeredIn(pipeline)
+	dieIf(err)
 	fmt.Printf("Thus it would come to trigger the following resources: %v\n", color.CyanString("%v", resources))
 
-	for _, rName := range resources {
-		resourceName := string(rName)
-		fmt.Printf("\nOf %s:\n", color.CyanString("%s", resourceName))
+	slice.Sort(resources, func(i, j int) bool {
+		return resources[i] < resources[j]
+	})
+	for _, resourceName := range resources {
+		fmt.Printf("\nOf %s:\n", fmtResourceName(resourceName))
 		rv, err := pipelineClient.gitSha2ResourceVersion(resourceName, commit.Id().String())
 		dieIf(err)
 
-		fmt.Printf("%s", pipelineClient.describeResourceJourney(rv))
+		fmt.Printf("%s", pipelineClient.DescribeResourceJourney(rv))
 	}
 }
