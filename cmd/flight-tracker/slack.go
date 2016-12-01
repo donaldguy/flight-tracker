@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bluele/slack"
+	"github.com/donaldguy/flightplan"
 )
 
 type Slack struct {
@@ -37,8 +38,8 @@ func (s *Slack) WriteBuildToChannel(build *Build, channelName string) error {
 	}
 	ats[0].Fields = append(ats[0].Fields, phabMessageFields(build.Commit)...)
 
-	for _, res := range build.Actual.StartingResources {
-		addAttatchemntsForResourceBuild(&ats, res, build.Actual.BaseURL)
+	for _, res := range build.StartingResources {
+		addAttatchemntsForBuildResource(&ats, build, build.Expected[res].Start)
 	}
 
 	opts := &slack.ChatPostMessageOpt{
@@ -51,29 +52,56 @@ func (s *Slack) WriteBuildToChannel(build *Build, channelName string) error {
 	return api.ChatPostMessage(channelId, "", opts)
 }
 
-func addAttatchemntsForResourceBuild(ats *[]*slack.Attachment, build *ResourceSection, baseURL string) {
-	*ats = append(*ats, &slack.Attachment{
-		Title: fmt.Sprintf(":package: %s", build.Name),
-	})
-	var postLink string
-	for _, tb := range build.TriggeredBuilds {
-		if tb.Build.IsRunning() {
-			postLink = ": running"
+func addAttatchemntsForBuildResource(ats *[]*slack.Attachment, build *Build, resource *flightplan.ResourceNode) {
+	var title string
+	var status string
+	var cause string
+
+	if resource.OutputBy == nil {
+		cause = fmt.Sprintf(":package: %s", resource.Name)
+	} else {
+		cause = fmt.Sprintf(":outbox_tray: %s -> %s", resource.OutputBy.Name, resource.Name)
+	}
+
+	for _, tj := range resource.TriggeredJobs {
+		tb, statusText, done, evalChildren := build.EvalStatus(tj)
+		if tb == nil {
+			title = string(tj.Name)
+			status = statusText
 		} else {
-			postLink = fmt.Sprintf(" - %s after %s\n",
-				tb.Build.Status,
-				(time.Duration(tb.Build.EndTime-tb.Build.StartTime) * time.Second).String(),
+			title = fmt.Sprintf("<%s%s|%s>",
+				build.Actual.BaseURL,
+				tb.Build.URL,
+				tb.Name,
 			)
+			if done {
+				status = fmt.Sprintf("%s after %s\n",
+					tb.Build.Status,
+					(time.Duration(tb.Build.EndTime-tb.Build.StartTime) * time.Second).String(),
+				)
+			}
 		}
 
 		*ats = append(*ats, &slack.Attachment{
-			Color: slackStatusColor(tb.Build.Status),
-			Title: fmt.Sprintf("<%s%s|%s> %s",
-				baseURL,
-				tb.Build.URL,
-				tb.Name,
-				postLink,
-			),
+			Color: slackStatusColor(status),
+			Title: title,
+			Fields: []*slack.AttachmentField{
+				&slack.AttachmentField{
+					Title: "Status",
+					Value: status,
+					Short: true,
+				},
+				&slack.AttachmentField{
+					Title: "Cause",
+					Value: cause,
+					Short: true,
+				},
+			},
 		})
+		if evalChildren {
+			for _, o := range tj.Outputs {
+				addAttatchemntsForBuildResource(ats, build, o)
+			}
+		}
 	}
 }

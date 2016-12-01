@@ -63,15 +63,23 @@ func slackAttachmentAuthorComitter(commit flightplan.GitCommit) *slack.Attachmen
 }
 
 func slackStatusColor(status string) (color string) {
-	switch status {
+	switch strings.Split(status, " ")[0] {
 	case "succeeded":
 		color = "#2CC55E"
 	case "failed":
 		color = "#DF342E"
 	case "canceled":
 		color = "#7B3922"
+	case "running":
+		fallthrough
 	case "started":
 		color = "#EDBA10"
+	case "pending":
+		color = "#BDC3C6"
+	case "paused":
+		color = "#3398DB"
+	case "aborted":
+		color = "#8F4B2C"
 	default:
 		color = "#DE6A1B"
 	}

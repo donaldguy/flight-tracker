@@ -89,4 +89,5 @@ func main() {
 	}
 	err = s.WriteBuildToChannel(build, opts.SlackChannel)
 	dieIf(err)
+	fmt.Printf("%v\n", build.IsDone())
 }

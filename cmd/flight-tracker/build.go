@@ -1,11 +1,6 @@
 package main
 
-import (
-	"fmt"
-	"os"
-
-	"github.com/donaldguy/flightplan"
-)
+import "github.com/donaldguy/flightplan"
 
 type Build struct {
 	Commit            flightplan.GitCommit
@@ -44,6 +39,56 @@ func (b *Build) Observe() (err error) {
 	return
 }
 
+func (b *Build) EvalStatus(j *flightplan.JobNode) (triggeredBuild *BuildSection, statusText string, doneRunning bool, shouldEvalChildren bool) {
+	var seen bool
+	triggeredBuild, seen = b.Actual.BuildIndex[string(j.Name)]
+	if seen {
+		if triggeredBuild.Build.IsRunning() {
+			return triggeredBuild, "running", false, true
+		} else {
+			statusText = triggeredBuild.Build.Status
+			switch statusText {
+			case "succeeded":
+				return triggeredBuild, statusText, true, true
+			case "failed":
+				fallthrough
+			case "errored":
+				fallthrough
+			case "aborted":
+				return triggeredBuild, statusText, true, false
+			}
+			return triggeredBuild, statusText, false, true
+		}
+	} else {
+		job, _, err := b.pc.Job(b.pc.PipelineName, string(j.Name))
+		if err != nil {
+			return nil, "error querying", false, true
+		}
+		if job.Paused {
+			return nil, "paused", true, false
+		}
+	}
+	return nil, "pending", false, true
+}
+
+func (b *Build) isSubtreeDone(r *flightplan.ResourceNode) bool {
+	for _, tj := range r.TriggeredJobs {
+		_, _, done, shouldEvalChildren := b.EvalStatus(tj)
+		if !shouldEvalChildren || len(tj.Outputs) == 0 {
+			return done
+		} else {
+			childrenDone := done
+			for _, child := range tj.Outputs {
+				if !done {
+					return false
+				}
+				childrenDone = childrenDone && b.isSubtreeDone(child)
+			}
+		}
+	}
+	return true
+}
+
 func (b *Build) IsDone() bool {
 	if b.Actual == nil {
 		err := b.Observe()
@@ -53,27 +98,11 @@ func (b *Build) IsDone() bool {
 	}
 
 	for _, resourceName := range b.StartingResources {
-		for jobName := range b.Expected[resourceName].JobIndex {
-			if realBuild, exists := b.Actual.BuildIndex[string(jobName)]; exists {
-				if realBuild.Build.IsRunning() {
-					return false
-				}
-			} else {
-				j, _, err := b.pc.Job(b.pc.PipelineName, string(jobName))
-				if err == nil && j.Paused {
-					continue
-				}
-				if err != nil {
-					fmt.Fprintf(
-						os.Stderr, "Error querying %s/%s state: %s\n",
-						b.pc.PipelineName,
-						jobName,
-						err,
-					)
-				}
-				return false
-			}
+		graph := b.Expected[resourceName]
+		if !b.isSubtreeDone(graph.Start) {
+			return false
 		}
 	}
+
 	return true
 }
