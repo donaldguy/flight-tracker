@@ -18,7 +18,7 @@ func slackInit(token string) *Slack {
 	}
 }
 
-func (s *Slack) WriteJourneyToChannel(journey *Journey, channelName string) error {
+func (s *Slack) WriteBuildToChannel(build *Build, channelName string) error {
 	api := s.api
 	//u, err := api.FindUserByName(name)
 	var channelId string
@@ -33,12 +33,12 @@ func (s *Slack) WriteJourneyToChannel(journey *Journey, channelName string) erro
 	}
 
 	ats := []*slack.Attachment{
-		slackAttachmentAuthorComitter(journey.StartingCommit),
+		slackAttachmentAuthorComitter(build.Commit),
 	}
-	ats[0].Fields = append(ats[0].Fields, phabMessageFields(journey.StartingCommit)...)
+	ats[0].Fields = append(ats[0].Fields, phabMessageFields(build.Commit)...)
 
-	for _, res := range journey.StartingResources {
-		addAttatchemntsForResourceBuild(&ats, res, journey.BaseURL)
+	for _, res := range build.Actual.StartingResources {
+		addAttatchemntsForResourceBuild(&ats, res, build.Actual.BaseURL)
 	}
 
 	opts := &slack.ChatPostMessageOpt{

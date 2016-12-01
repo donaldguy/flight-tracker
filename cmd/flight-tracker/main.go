@@ -78,13 +78,15 @@ func main() {
 	commit := flightplan.GitCommit{Repo: repo, Commit: gCommit}
 	dieIf(err)
 
-	journey, err := NewJourney(pipelineClient, commit)
+	build, err := NewBuild(pipelineClient, commit)
+	dieIf(err)
+	err = build.Observe()
 	dieIf(err)
 
 	s := slackInit(opts.SlackToken)
 	if opts.SlackChannel[0] == '#' {
 		opts.SlackChannel = opts.SlackChannel[1:]
 	}
-	err = s.WriteJourneyToChannel(journey, opts.SlackChannel)
+	err = s.WriteBuildToChannel(build, opts.SlackChannel)
 	dieIf(err)
 }

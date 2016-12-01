@@ -9,10 +9,9 @@ import (
 	"github.com/donaldguy/flightplan"
 )
 
-type Journey struct {
+type ObservedBuild struct {
 	BaseURL           string
-	StartingCommit    flightplan.GitCommit
-	StartingResources []*ResourceSection
+	StartingResources map[string]*ResourceSection
 	BuildIndex        map[string]*BuildSection
 }
 
@@ -28,32 +27,19 @@ type BuildSection struct {
 	Outputs []*ResourceSection
 }
 
-func NewJourney(pc *PipelineClient, commit flightplan.GitCommit) (*Journey, error) {
-	pipeline, err := flightplan.NewPipeline(pc.Team, pc.PipelineName)
-	if err != nil {
-		return nil, err
-	}
-	resources, err := commit.ResourcesTriggeredIn(pipeline)
-	if err != nil {
-		return nil, err
-	}
-
+func NewObservedBuild(pc *PipelineClient, commit flightplan.GitCommit, resources []string) (ob *ObservedBuild, err error) {
 	versionedResources := make([]*atc.VersionedResource, len(resources))
 	for i, resourceName := range resources {
 		versionedResources[i], err = pc.gitSha2ResourceVersion(resourceName, commit.Id().String())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
+			err = nil
 		}
 	}
 
-	slice.Sort(versionedResources, func(i, j int) bool {
-		return versionedResources[i].Resource < versionedResources[j].Resource
-	})
-
-	j := &Journey{
+	ob = &ObservedBuild{
 		BaseURL:           pc.Client.URL(),
-		StartingCommit:    commit,
-		StartingResources: []*ResourceSection{},
+		StartingResources: map[string]*ResourceSection{},
 		BuildIndex:        make(map[string]*BuildSection),
 	}
 
@@ -61,15 +47,20 @@ func NewJourney(pc *PipelineClient, commit flightplan.GitCommit) (*Journey, erro
 		if rv == nil {
 			continue
 		}
-		j.StartingResources = append(j.StartingResources, newResourceJourney(pc, rv, j.BuildIndex))
+		ob.StartingResources[rv.Resource], err = newResourceObservedBuild(pc, rv, ob.BuildIndex)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	return j, nil
+	return
 }
 
-func newResourceJourney(pc *PipelineClient, rv *atc.VersionedResource, buildMap map[string]*BuildSection) *ResourceSection {
+func newResourceObservedBuild(pc *PipelineClient, rv *atc.VersionedResource, buildMap map[string]*BuildSection) (*ResourceSection, error) {
 	builds, _, err := pc.Team.BuildsWithVersionAsInput(pc.PipelineName, rv.Resource, rv.ID)
-	dieIf(err)
+	if err != nil {
+		return nil, err
+	}
 
 	r := &ResourceSection{
 		Name:            rv.Resource,
@@ -94,7 +85,9 @@ func newResourceJourney(pc *PipelineClient, rv *atc.VersionedResource, buildMap 
 		buildMap[b.Build.JobName] = b
 
 		rio, _, err := pc.Client.BuildResources(build.ID)
-		dieIf(err)
+		if err != nil {
+			return nil, err
+		}
 
 		for _, output := range rio.Outputs {
 			realOutput, err := pc.findVersion(output.Resource, output.Version)
@@ -102,9 +95,15 @@ func newResourceJourney(pc *PipelineClient, rv *atc.VersionedResource, buildMap 
 				if realOutput.ID == rv.ID {
 					continue // avoid infinite recursion
 				}
+			} else {
+				return nil, err
 			}
-			b.Outputs = append(b.Outputs, newResourceJourney(pc, realOutput, buildMap))
+			rob, err := newResourceObservedBuild(pc, realOutput, buildMap)
+			if err != nil {
+				return nil, err
+			}
+			b.Outputs = append(b.Outputs, rob)
 		}
 	}
-	return r
+	return r, nil
 }
