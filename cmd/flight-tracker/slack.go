@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/bluele/slack"
-	"github.com/donaldguy/flightplan"
 )
 
 type Slack struct {
@@ -19,7 +18,7 @@ func slackInit(token string) *Slack {
 	}
 }
 
-func (s *Slack) WriteBuildToChannel(commit flightplan.GitCommit, builds []*ResourceSection, channelName string) error {
+func (s *Slack) WriteJourneyToChannel(journey *Journey, channelName string) error {
 	api := s.api
 	//u, err := api.FindUserByName(name)
 	var channelId string
@@ -34,12 +33,12 @@ func (s *Slack) WriteBuildToChannel(commit flightplan.GitCommit, builds []*Resou
 	}
 
 	ats := []*slack.Attachment{
-		slackAttachmentAuthorComitter(commit),
+		slackAttachmentAuthorComitter(journey.StartingCommit),
 	}
-	ats[0].Fields = append(ats[0].Fields, phabMessageFields(commit)...)
+	ats[0].Fields = append(ats[0].Fields, phabMessageFields(journey.StartingCommit)...)
 
-	for _, build := range builds {
-		addAttatchemntsForResourceBuild(&ats, build)
+	for _, res := range journey.StartingResources {
+		addAttatchemntsForResourceBuild(&ats, res, journey.BaseURL)
 	}
 
 	opts := &slack.ChatPostMessageOpt{
@@ -52,7 +51,7 @@ func (s *Slack) WriteBuildToChannel(commit flightplan.GitCommit, builds []*Resou
 	return api.ChatPostMessage(channelId, "", opts)
 }
 
-func addAttatchemntsForResourceBuild(ats *[]*slack.Attachment, build *ResourceSection) {
+func addAttatchemntsForResourceBuild(ats *[]*slack.Attachment, build *ResourceSection, baseURL string) {
 	*ats = append(*ats, &slack.Attachment{
 		Title: fmt.Sprintf(":package: %s", build.Name),
 	})
@@ -70,7 +69,7 @@ func addAttatchemntsForResourceBuild(ats *[]*slack.Attachment, build *ResourceSe
 		*ats = append(*ats, &slack.Attachment{
 			Color: slackStatusColor(tb.Build.Status),
 			Title: fmt.Sprintf("<%s%s|%s> %s",
-				build.BaseURL,
+				baseURL,
 				tb.Build.URL,
 				tb.Name,
 				postLink,

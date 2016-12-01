@@ -5,7 +5,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/bradfitz/slice"
 	"github.com/concourse/fly/rc"
 	"github.com/donaldguy/flightplan"
 	flags "github.com/jessevdk/go-flags"
@@ -64,9 +63,7 @@ func main() {
 	if opts.Pipeline == "" {
 		opts.Pipeline = opts.Branch
 	}
-
-	teamClient := target.Team()
-	pipelineClient := PipelineClient{
+	pipelineClient := &PipelineClient{
 		Client:       target.Client(),
 		Team:         target.Team(),
 		PipelineName: opts.Pipeline,
@@ -78,31 +75,16 @@ func main() {
 	dieIf(err)
 	gCommit, err := obj.AsCommit()
 	dieIf(err)
-
 	commit := flightplan.GitCommit{Repo: repo, Commit: gCommit}
-
-	pipeline, err := flightplan.NewPipeline(teamClient, opts.Pipeline)
-	dieIf(err)
-	resources, err := commit.ResourcesTriggeredIn(pipeline)
 	dieIf(err)
 
-	slice.Sort(resources, func(i, j int) bool {
-		return resources[i] < resources[j]
-	})
-
-	journeys := make([]*ResourceSection, len(resources))
-
-	for i, resourceName := range resources {
-		rv, err := pipelineClient.gitSha2ResourceVersion(resourceName, commit.Id().String())
-		dieIf(err)
-
-		journeys[i] = NewResourceJourney(&pipelineClient, rv)
-	}
+	journey, err := NewJourney(pipelineClient, commit)
+	dieIf(err)
 
 	s := slackInit(opts.SlackToken)
 	if opts.SlackChannel[0] == '#' {
 		opts.SlackChannel = opts.SlackChannel[1:]
 	}
-	err = s.WriteBuildToChannel(commit, journeys, opts.SlackChannel)
+	err = s.WriteJourneyToChannel(journey, opts.SlackChannel)
 	dieIf(err)
 }

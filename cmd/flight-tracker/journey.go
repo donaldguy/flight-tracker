@@ -2,14 +2,22 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/bradfitz/slice"
 	"github.com/concourse/atc"
+	"github.com/donaldguy/flightplan"
 )
+
+type Journey struct {
+	BaseURL           string
+	StartingCommit    flightplan.GitCommit
+	StartingResources []*ResourceSection
+	BuildIndex        map[string]*BuildSection
+}
 
 type ResourceSection struct {
 	Name            string
-	BaseURL         string
 	Resource        *atc.VersionedResource
 	TriggeredBuilds []*BuildSection
 }
@@ -20,8 +28,43 @@ type BuildSection struct {
 	Outputs []*ResourceSection
 }
 
-func NewResourceJourney(pc *PipelineClient, rv *atc.VersionedResource) *ResourceSection {
-	return newResourceJourney(pc, rv, make(map[string]*BuildSection))
+func NewJourney(pc *PipelineClient, commit flightplan.GitCommit) (*Journey, error) {
+	pipeline, err := flightplan.NewPipeline(pc.Team, pc.PipelineName)
+	if err != nil {
+		return nil, err
+	}
+	resources, err := commit.ResourcesTriggeredIn(pipeline)
+	if err != nil {
+		return nil, err
+	}
+
+	versionedResources := make([]*atc.VersionedResource, len(resources))
+	for i, resourceName := range resources {
+		versionedResources[i], err = pc.gitSha2ResourceVersion(resourceName, commit.Id().String())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
+	}
+
+	slice.Sort(versionedResources, func(i, j int) bool {
+		return versionedResources[i].Resource < versionedResources[j].Resource
+	})
+
+	j := &Journey{
+		BaseURL:           pc.Client.URL(),
+		StartingCommit:    commit,
+		StartingResources: []*ResourceSection{},
+		BuildIndex:        make(map[string]*BuildSection),
+	}
+
+	for _, rv := range versionedResources {
+		if rv == nil {
+			continue
+		}
+		j.StartingResources = append(j.StartingResources, newResourceJourney(pc, rv, j.BuildIndex))
+	}
+
+	return j, nil
 }
 
 func newResourceJourney(pc *PipelineClient, rv *atc.VersionedResource, buildMap map[string]*BuildSection) *ResourceSection {
@@ -30,7 +73,6 @@ func newResourceJourney(pc *PipelineClient, rv *atc.VersionedResource, buildMap 
 
 	r := &ResourceSection{
 		Name:            rv.Resource,
-		BaseURL:         pc.Client.URL(),
 		Resource:        rv,
 		TriggeredBuilds: []*BuildSection{},
 	}
