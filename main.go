@@ -90,14 +90,14 @@ func main() {
 	builds := make(chan *Build)
 	go repoWatcher(repo, pc, builds, opts)
 
-	s := slackInit(opts.SlackToken)
+	slack := slackInit(opts.SlackToken)
 	if opts.SlackChannel[0] == '#' {
 		opts.SlackChannel = opts.SlackChannel[1:]
 	}
 
 	for build := range builds {
-		go buildWatcher(build, opts, func(*Build) {
-			err = s.WriteBuildToChannel(build, opts.SlackChannel)
+		go buildWatcher(build, opts, func(b *Build) {
+			err = slack.WriteBuildToChannel(b, opts.SlackChannel)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing to slack: %s", err.Error())
 			}
