@@ -6,9 +6,7 @@ import (
 	"time"
 
 	"github.com/concourse/fly/rc"
-	"github.com/donaldguy/flightplan"
 	flags "github.com/jessevdk/go-flags"
-	git "gopkg.in/libgit2/git2go.v24"
 )
 
 type duration time.Duration
@@ -25,13 +23,17 @@ type options struct {
 	Target   rc.TargetName `short:"t" long:"target" description:"Fly target to monitor" env:"FLIGHT_TRACKER_SERVER" required:"true"`
 	Pipeline string        `short:"p" long:"pipeline" description:"Name of pipeline you are tracking. Defaults to name of branch"`
 
-	RepoPath string `short:"r" long:"git-repo-path" description:"Path to a local checkout of the git repo you are tracking" required:"true"`
+	RepoURL  string `short:"r" long:"git-repo-url" description:"git url or github username/repo to clone and watch"`
+	RepoPath string `short:"R" long:"git-repo-path" description:"Path to a local checkout of a git repo to use"`
+	SSHKey   string `short:"i" long:"ssh-private-key" description:"Path to an ssh key to use for querying git changes"`
 	Branch   string `short:"b" long:"branch" description:"The name of the branch you are tracking" default:"master"`
 
 	SlackToken   string `long:"slack-token" env:"FLIGHT_TRACKER_SLACK_TOKEN" required:"true" description:"Slack token"`
 	SlackChannel string `short:"c" long:"slack-channel" required:"true" description:"Slack channel or username to send to"`
 
-	PollFreq duration `short:"f" long:"polling-frequency" default:"5s"`
+	ConcoursePollFreq duration `short:"f" long:"concourse-poll-frequency" default:"5s" description:"How frequently to poll concourse for changes"`
+	GitPollFreq       duration `short:"g" long:"git-polling-frequency" default:"5s" description:"How frequently to attempt to fetch the git repo"`
+	DoFirst           bool     `short:"y" description:"Trigger on the current head of the branch"`
 }
 
 func dieIf(err error) {
@@ -41,25 +43,24 @@ func dieIf(err error) {
 	}
 }
 
-func main() {
+func handleFlags() *options {
 	var opts options
 	opts.Version = func() {
 		fmt.Println("0.0.1")
 		os.Exit(0)
 	}
-
 	parser := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash)
-
-	args, err := parser.Parse()
+	_, err := parser.Parse()
 	dieIf(err)
+	return &opts
+}
 
+func initPipelineClient(opts *options) (*PipelineClient, error) {
 	target, err := rc.LoadTarget(opts.Target)
-	dieIf(err)
-
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "You must provide a commit to describe")
-		os.Exit(1)
+	if err != nil {
+		return nil, err
 	}
+
 	if opts.Pipeline == "" {
 		opts.Pipeline = opts.Branch
 	}
@@ -68,26 +69,38 @@ func main() {
 		Team:         target.Team(),
 		PipelineName: opts.Pipeline,
 	}
+	return pipelineClient, nil
+}
 
-	repo, err := git.OpenRepository(opts.RepoPath)
+func main() {
+	opts := handleFlags()
+
+	pc, err := initPipelineClient(opts)
 	dieIf(err)
-	obj, err := repo.RevparseSingle(args[0])
-	dieIf(err)
-	gCommit, err := obj.AsCommit()
-	dieIf(err)
-	commit := flightplan.GitCommit{Repo: repo, Commit: gCommit}
+	_, err = pc.AuthToken()
+	if err != nil {
+		fmt.Printf("Not authorized with Concourse Server.\nPlease run:\n\tfly -t %s login\nand try again!\n\n",
+			opts.Target)
+		os.Exit(1)
+	}
+
+	repo, err := initGitRepo(opts)
 	dieIf(err)
 
-	build, err := NewBuild(pipelineClient, commit)
-	dieIf(err)
-	err = build.Observe()
-	dieIf(err)
+	builds := make(chan *Build)
+	go repoWatcher(repo, pc, builds, opts)
 
 	s := slackInit(opts.SlackToken)
 	if opts.SlackChannel[0] == '#' {
 		opts.SlackChannel = opts.SlackChannel[1:]
 	}
-	err = s.WriteBuildToChannel(build, opts.SlackChannel)
-	dieIf(err)
-	fmt.Printf("%v\n", build.IsDone())
+
+	for build := range builds {
+		go buildWatcher(build, opts, func(*Build) {
+			err = s.WriteBuildToChannel(build, opts.SlackChannel)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing to slack: %s", err.Error())
+			}
+		})
+	}
 }

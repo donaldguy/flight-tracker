@@ -19,7 +19,7 @@ func (pc *PipelineClient) gitSha2ResourceVersion(resourceName, sha string) (*atc
 		return nil, err
 	}
 
-	if any {
+	if any && len(rvs) > 0 {
 		if rvs[0].Type != "git" {
 			return nil, fmt.Errorf("Resource named %s doesn't appear to be a git repo!", resourceName)
 		}
